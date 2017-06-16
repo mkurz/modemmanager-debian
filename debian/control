@@ -30,7 +30,6 @@ Architecture: linux-any
 Depends: ${shlibs:Depends},
          ${misc:Depends},
 Recommends: usb-modeswitch
-Breaks: network-manager (<< 0.9.8.2-1)
 Description: D-Bus service for managing modems
  ModemManager is a DBus-activated daemon which controls mobile broadband
  (2G/3G/4G) devices and connections. Whether built-in devices, USB dongles,
@@ -43,8 +42,6 @@ Section: libdevel
 Architecture: linux-any
 Multi-Arch: same
 Depends: ${misc:Depends}
-Replaces: modemmanager (<< 0.7.990)
-Breaks: modemmanager (<< 0.7.990)
 Suggests: modemmanager-doc
 Description: D-Bus service for managing modems - development files
  ModemManager is a DBus-activated daemon which controls mobile broadband
