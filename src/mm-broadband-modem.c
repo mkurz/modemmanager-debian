@@ -372,17 +372,43 @@ current_capabilities_ws46_test_ready (MMBaseModem *self,
                                       LoadCapabilitiesContext *ctx)
 {
     const gchar *response;
+    GArray      *modes;
+    guint        i;
 
     /* Completely ignore errors in AT+WS46=? */
     response = mm_base_modem_at_command_finish (self, res, NULL);
-    if (response &&
-        (strstr (response, "28") != NULL ||   /* 4G only */
-         strstr (response, "30") != NULL ||   /* 2G/4G */
-         strstr (response, "31") != NULL)) {  /* 3G/4G */
-        /* Add LTE caps */
-        ctx->caps |= MM_MODEM_CAPABILITY_LTE;
+    if (!response)
+        goto out;
+
+    modes = mm_3gpp_parse_ws46_test_response (response, NULL);
+    if (!modes)
+        goto out;
+
+    /* Add LTE caps if any of the reported modes supports 4G */
+    for (i = 0; i < modes->len; i++) {
+        if (g_array_index (modes, MMModemMode, i) & MM_MODEM_MODE_4G) {
+            ctx->caps |= MM_MODEM_CAPABILITY_LTE;
+            break;
+        }
     }
 
+    /* The +CGSM capability is saying that the modem is a 3GPP modem, but that
+     * doesn't necessarily mean it's a GSM/UMTS modem, it could be a LTE-only
+     * device. We did add the GSM_UMTS capability when +CGSM was found, so now
+     * we'll check if the device only reports 4G-only mode, and remove the
+     * capability if so.
+     *
+     * Note that we don't change the default +CGSM -> GSM/UMTS logic, we just
+     * fix it up.
+     */
+    if ((modes->len == 1) && (g_array_index (modes, MMModemMode, 0) == MM_MODEM_MODE_4G)) {
+        g_assert (ctx->caps & MM_MODEM_CAPABILITY_LTE);
+        ctx->caps &= ~MM_MODEM_CAPABILITY_GSM_UMTS;
+    }
+
+    g_array_unref (modes);
+
+out:
     g_simple_async_result_set_op_res_gpointer (
         ctx->result,
         GUINT_TO_POINTER (ctx->caps),
@@ -1424,78 +1450,40 @@ supported_modes_ws46_test_ready (MMBroadbandModem *self,
                                  LoadSupportedModesContext *ctx)
 {
     const gchar *response;
-    GError *error = NULL;
+    GArray      *modes;
+    GError      *error = NULL;
+    guint        i;
 
     response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, &error);
-    if (!error) {
-        MMModemMode mode = MM_MODEM_MODE_NONE;
-
-        /*
-         * More than one numeric ID may appear in the list, that's why
-         * they are checked separately.
-         *
-         * NOTE: Do not skip WS46 prefix; it would break Cinterion handling.
-         *
-         * From 3GPP TS 27.007 v.11.2.0, section 5.9
-         * 12	GSM Digital Cellular Systems (GERAN only)
-         * 22	UTRAN only
-         * 25	3GPP Systems (GERAN, UTRAN and E-UTRAN)
-         * 28	E-UTRAN only
-         * 29	GERAN and UTRAN
-         * 30	GERAN and E-UTRAN
-         * 31	UTRAN and E-UTRAN
-         */
-
-        if (strstr (response, "12") != NULL) {
-            mm_dbg ("Device allows (3GPP) 2G-only network mode");
-            mode |= MM_MODEM_MODE_2G;
-        }
-
-        if (strstr (response, "22") != NULL) {
-            mm_dbg ("Device allows (3GPP) 3G-only network mode");
-            mode |= MM_MODEM_MODE_3G;
-        }
-
-        if (strstr (response, "28") != NULL) {
-            mm_dbg ("Device allows (3GPP) 4G-only network mode");
-            mode |= MM_MODEM_MODE_4G;
-        }
-
-        if (strstr (response, "29") != NULL) {
-            mm_dbg ("Device allows (3GPP) 2G/3G network mode");
-            mode |= (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-        }
-
-        if (strstr (response, "30") != NULL) {
-            mm_dbg ("Device allows (3GPP) 2G/4G network mode");
-            mode |= (MM_MODEM_MODE_2G | MM_MODEM_MODE_4G);
-        }
-
-        if (strstr (response, "31") != NULL) {
-            mm_dbg ("Device allows (3GPP) 3G/4G network mode");
-            mode |= (MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
-        }
-
-        if (strstr (response, "25") != NULL) {
-            if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self))) {
-                mm_dbg ("Device allows every supported 3GPP network mode (2G/3G/4G)");
-                mode |= (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G);
-            } else {
-                mm_dbg ("Device allows every supported 3GPP network mode (2G/3G)");
-                mode |= (MM_MODEM_MODE_2G | MM_MODEM_MODE_3G);
-            }
-        }
-
-        /* If no expected ID found, log error */
-        if (mode == MM_MODEM_MODE_NONE)
-            mm_dbg ("Invalid list of supported networks reported by WS46=?: '%s'", response);
-        else
-            ctx->mode |= mode;
-    } else {
+    if (error) {
         mm_dbg ("Generic query of supported 3GPP networks with WS46=? failed: '%s'", error->message);
         g_error_free (error);
+        goto out;
     }
 
+    modes = mm_3gpp_parse_ws46_test_response (response, &error);
+    if (!modes) {
+        mm_dbg ("Parsing WS46=? response failed: '%s'", error->message);
+        g_error_free (error);
+        goto out;
+    }
+
+    for (i = 0; i < modes->len; i++) {
+        MMModemMode  mode;
+        gchar       *str;
+
+        mode = g_array_index (modes, MMModemMode, i);
+
+        ctx->mode |= mode;
+
+        str = mm_modem_mode_build_string_from_mask (mode);
+        mm_dbg ("Device allows (3GPP) mode combination: %s", str);
+        g_free (str);
+    }
+
+    g_array_unref (modes);
+
+out:
     /* Now keep on with the loading, we may need CDMA-specific checks */
     ctx->run_ws46 = FALSE;
     load_supported_modes_step (ctx);
@@ -2119,7 +2107,6 @@ access_tech_context_complete_and_free (AccessTechContext *ctx,
             mask = MM_IFACE_MODEM_CDMA_ALL_ACCESS_TECHNOLOGIES_MASK;
             break;
         case QCDM_CMD_CM_SUBSYS_STATE_INFO_SYSTEM_MODE_GSM:
-        case QCDM_CMD_CM_SUBSYS_STATE_INFO_SYSTEM_MODE_WCDMA:
         case QCDM_CMD_CM_SUBSYS_STATE_INFO_SYSTEM_MODE_GW:
             if (ctx->wcdma_open) {
                 /* Assume UMTS; can't yet determine UMTS/HSxPA/HSPA+ with QCDM */
@@ -2127,6 +2114,13 @@ access_tech_context_complete_and_free (AccessTechContext *ctx,
             } else {
                 /* Assume GPRS; can't yet determine GSM/GPRS/EDGE with QCDM */
                 act = MM_MODEM_ACCESS_TECHNOLOGY_GPRS;
+            }
+            mask = MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK;
+            break;
+        case QCDM_CMD_CM_SUBSYS_STATE_INFO_SYSTEM_MODE_WCDMA:
+            if (ctx->wcdma_open) {
+                /* Assume UMTS; can't yet determine UMTS/HSxPA/HSPA+ with QCDM */
+                act = MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
             }
             mask = MM_IFACE_MODEM_3GPP_ALL_ACCESS_TECHNOLOGIES_MASK;
             break;
@@ -2185,7 +2179,8 @@ access_tech_qcdm_wcdma_ready (MMPortSerialQcdm *port,
 
         if (l1 == QCDM_WCDMA_L1_STATE_PCH ||
             l1 == QCDM_WCDMA_L1_STATE_FACH ||
-            l1 == QCDM_WCDMA_L1_STATE_DCH)
+            l1 == QCDM_WCDMA_L1_STATE_DCH ||
+            l1 == QCDM_WCDMA_L1_STATE_PCH_SLEEP)
             ctx->wcdma_open = TRUE;
     }
 
@@ -5370,7 +5365,7 @@ typedef struct {
 static void
 lock_sms_storages_context_complete_and_free (LockSmsStoragesContext *ctx)
 {
-    g_simple_async_result_complete (ctx->result);
+    g_simple_async_result_complete_in_idle (ctx->result);
     g_object_unref (ctx->result);
     g_object_unref (ctx->self);
     g_slice_free (LockSmsStoragesContext, ctx);
@@ -5410,7 +5405,7 @@ mm_broadband_modem_lock_sms_storages (MMBroadbandModem *self,
                                       gpointer user_data)
 {
     LockSmsStoragesContext *ctx;
-    gchar *cmd;
+    gchar *cmd = NULL;
     gchar *mem1_str = NULL;
     gchar *mem2_str = NULL;
 
@@ -5439,45 +5434,52 @@ mm_broadband_modem_lock_sms_storages (MMBroadbandModem *self,
                                              user_data,
                                              mm_broadband_modem_lock_sms_storages);
 
+    /* Some modems may not support empty string parameters, then if mem1 is
+     * UNKNOWN, and current sms mem1 storage has a valid value, we send again
+     * the already locked mem1 value in place of an empty string.
+     * This way we also avoid to confuse the environment of other sync operation
+     * that have potentially locked mem1 previously.
+     */
     if (mem1 != MM_SMS_STORAGE_UNKNOWN) {
         ctx->mem1_locked = TRUE;
         ctx->previous_mem1 = self->priv->current_sms_mem1_storage;
-        self->priv->mem1_storage_locked = TRUE;
+
         self->priv->current_sms_mem1_storage = mem1;
-        mem1_str = g_ascii_strup (mm_sms_storage_get_string (self->priv->current_sms_mem1_storage), -1);
+        self->priv->mem1_storage_locked = TRUE;
+    } else if (self->priv->current_sms_mem1_storage != MM_SMS_STORAGE_UNKNOWN) {
+        mm_dbg ("Given sms mem1 storage is unknown. Using current sms mem1 storage value '%s' instead",
+                mm_sms_storage_get_string (self->priv->current_sms_mem1_storage));
+    } else {
+        g_simple_async_result_set_error (ctx->result,
+                                         MM_CORE_ERROR,
+                                         MM_CORE_ERROR_RETRY,
+                                        "Cannot lock mem2 storage alone when current mem1 storage is unknown");
+        lock_sms_storages_context_complete_and_free (ctx);
+        return;
     }
+    mem1_str = g_ascii_strup (mm_sms_storage_get_string (self->priv->current_sms_mem1_storage), -1);
 
     if (mem2 != MM_SMS_STORAGE_UNKNOWN) {
         ctx->mem2_locked = TRUE;
         ctx->previous_mem2 = self->priv->current_sms_mem2_storage;
+
         self->priv->mem2_storage_locked = TRUE;
         self->priv->current_sms_mem2_storage = mem2;
-        mem2_str = g_ascii_strup (mm_sms_storage_get_string (self->priv->current_sms_mem2_storage), -1);
 
-        if (mem1 == MM_SMS_STORAGE_UNKNOWN) {
-            /* Some modems may not support empty string parameters. Then if mem1 is
-             * UNKNOWN, we send again the already locked mem1 value in place of an
-             * empty string. This way we also avoid to confuse the environment of
-             * other async operation that have potentially locked mem1 previoulsy.
-             * */
-            mem1_str = g_ascii_strup (mm_sms_storage_get_string (self->priv->current_sms_mem1_storage), -1);
-        }
+        mem2_str = g_ascii_strup (mm_sms_storage_get_string (self->priv->current_sms_mem2_storage), -1);
     }
 
-    /* We don't touch 'mem3' here */
+    g_assert (mem1_str != NULL);
 
+    /* We don't touch 'mem3' here */
     mm_dbg ("Locking SMS storages to: mem1 (%s), mem2 (%s)...",
-            mem1_str ? mem1_str : "none",
+            mem1_str,
             mem2_str ? mem2_str : "none");
 
     if (mem2_str)
-        cmd = g_strdup_printf ("+CPMS=\"%s\",\"%s\"",
-                               mem1_str ? mem1_str : "",
-                               mem2_str);
-    else if (mem1_str)
-        cmd = g_strdup_printf ("+CPMS=\"%s\"", mem1_str);
+        cmd = g_strdup_printf ("+CPMS=\"%s\",\"%s\"", mem1_str, mem2_str);
     else
-        g_assert_not_reached ();
+        cmd = g_strdup_printf ("+CPMS=\"%s\"", mem1_str);
 
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               cmd,
@@ -5529,22 +5531,30 @@ modem_messaging_set_default_storage (MMIfaceModemMessaging *_self,
     gchar *mem1_str;
     gchar *mem_str;
 
+    /* We provide the current sms storage for mem1 if not UNKNOWN */
+    if (self->priv->current_sms_mem1_storage == MM_SMS_STORAGE_UNKNOWN) {
+        g_simple_async_report_error_in_idle (G_OBJECT (self),
+                                             callback,
+                                             user_data,
+                                             MM_CORE_ERROR,
+                                             MM_CORE_ERROR_INVALID_ARGS,
+                                             "Cannot set default storage when current mem1 storage is unknown");
+        return;
+    }
+
+    /* Set defaults as current */
+    self->priv->current_sms_mem2_storage = storage;
+
+    mem1_str = g_ascii_strup (mm_sms_storage_get_string (self->priv->current_sms_mem1_storage), -1);
+    mem_str = g_ascii_strup (mm_sms_storage_get_string (storage), -1);
+
+    cmd = g_strdup_printf ("+CPMS=\"%s\",\"%s\",\"%s\"", mem1_str, mem_str, mem_str);
+
     result = g_simple_async_result_new (G_OBJECT (self),
                                         callback,
                                         user_data,
                                         modem_messaging_set_default_storage);
 
-    /* Set defaults as current */
-    self->priv->current_sms_mem2_storage = storage;
-
-    /* We provide the current sms storage for mem1 if not UNKNOWN */
-    mem1_str = g_ascii_strup (mm_sms_storage_get_string (self->priv->current_sms_mem1_storage), -1);
-
-    mem_str = g_ascii_strup (mm_sms_storage_get_string (storage), -1);
-    cmd = g_strdup_printf ("+CPMS=\"%s\",\"%s\",\"%s\"",
-                           mem1_str ? mem1_str : "",
-                           mem_str,
-                           mem_str);
     mm_base_modem_at_command (MM_BASE_MODEM (self),
                               cmd,
                               3,
@@ -8047,6 +8057,71 @@ modem_time_check_support (MMIfaceModemTime *self,
 }
 
 /*****************************************************************************/
+/* Check support (Signal interface) */
+
+static gboolean
+modem_signal_check_support_finish (MMIfaceModemSignal  *self,
+                                   GAsyncResult        *res,
+                                   GError             **error)
+{
+    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+}
+
+static void
+modem_signal_check_support (MMIfaceModemSignal  *self,
+                            GAsyncReadyCallback  callback,
+                            gpointer             user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CESQ=?",
+                              3,
+                              TRUE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
+/* Load extended signal information (Signal interface) */
+
+static gboolean
+modem_signal_load_values_finish (MMIfaceModemSignal  *self,
+                                 GAsyncResult        *res,
+                                 MMSignal           **cdma,
+                                 MMSignal           **evdo,
+                                 MMSignal           **gsm,
+                                 MMSignal           **umts,
+                                 MMSignal           **lte,
+                                 GError             **error)
+{
+    const gchar *response;
+
+    response = mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
+    if (!response || !mm_3gpp_cesq_response_to_signal_info (response, gsm, umts, lte, error))
+        return FALSE;
+
+    /* No 3GPP2 support */
+    if (cdma)
+        *cdma = NULL;
+    if (evdo)
+        *evdo = NULL;
+    return TRUE;
+}
+
+static void
+modem_signal_load_values (MMIfaceModemSignal  *self,
+                          GCancellable        *cancellable,
+                          GAsyncReadyCallback  callback,
+                          gpointer             user_data)
+{
+    mm_base_modem_at_command (MM_BASE_MODEM (self),
+                              "+CESQ",
+                              3,
+                              TRUE,
+                              callback,
+                              user_data);
+}
+
+/*****************************************************************************/
 
 static const gchar *primary_init_sequence[] = {
     /* Ensure echo is off */
@@ -10513,6 +10588,10 @@ iface_modem_time_init (MMIfaceModemTime *iface)
 static void
 iface_modem_signal_init (MMIfaceModemSignal *iface)
 {
+    iface->check_support        = modem_signal_check_support;
+    iface->check_support_finish = modem_signal_check_support_finish;
+    iface->load_values          = modem_signal_load_values;
+    iface->load_values_finish   = modem_signal_load_values_finish;
 }
 
 static void
