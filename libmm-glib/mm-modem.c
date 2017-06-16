@@ -2987,6 +2987,7 @@ mm_modem_init (MMModem *self)
     g_mutex_init (&self->priv->supported_capabilities_mutex);
     g_mutex_init (&self->priv->supported_bands_mutex);
     g_mutex_init (&self->priv->current_bands_mutex);
+    g_mutex_init (&self->priv->ports_mutex);
 }
 
 static void
@@ -2999,6 +3000,7 @@ finalize (GObject *object)
     g_mutex_clear (&self->priv->supported_capabilities_mutex);
     g_mutex_clear (&self->priv->supported_bands_mutex);
     g_mutex_clear (&self->priv->current_bands_mutex);
+    g_mutex_clear (&self->priv->ports_mutex);
 
     if (self->priv->supported_modes)
         g_array_unref (self->priv->supported_modes);
@@ -3008,6 +3010,8 @@ finalize (GObject *object)
         g_array_unref (self->priv->supported_bands);
     if (self->priv->current_bands)
         g_array_unref (self->priv->current_bands);
+    if (self->priv->ports)
+       g_array_unref (self->priv->ports);
 
     G_OBJECT_CLASS (mm_modem_parent_class)->finalize (object);
 }

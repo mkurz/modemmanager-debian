@@ -561,6 +561,7 @@
     <keyword type="function" name="mm_modem_signal_setup_sync ()" link="MMModemSignal.html#mm-modem-signal-setup-sync"/>
     <keyword type="struct" name="struct MMModemSignal" link="MMModemSignal.html#MMModemSignal-struct"/>
     <keyword type="function" name="mm_signal_get_rssi ()" link="MMSignal.html#mm-signal-get-rssi"/>
+    <keyword type="function" name="mm_signal_get_rscp ()" link="MMSignal.html#mm-signal-get-rscp"/>
     <keyword type="function" name="mm_signal_get_ecio ()" link="MMSignal.html#mm-signal-get-ecio"/>
     <keyword type="function" name="mm_signal_get_sinr ()" link="MMSignal.html#mm-signal-get-sinr"/>
     <keyword type="function" name="mm_signal_get_io ()" link="MMSignal.html#mm-signal-get-io"/>

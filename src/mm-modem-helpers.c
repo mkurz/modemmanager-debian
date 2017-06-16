@@ -626,6 +626,149 @@ mm_3gpp_cds_regex_get (void)
 }
 
 /*************************************************************************/
+/* AT+WS46=? response parser
+ *
+ * More than one numeric ID may appear in the list, that's why
+ * they are checked separately.
+ *
+ * NOTE: ignore WS46 prefix or it will break Cinterion handling.
+ *
+ * For the specific case of '25', we will check if any other mode supports
+ * 4G, and if there is none, we'll remove 4G caps from it.
+ */
+
+typedef struct {
+    guint       ws46;
+    MMModemMode mode;
+} Ws46Mode;
+
+/* 3GPP TS 27.007 r14, section 5.9: select wireless network +WS46 */
+static const Ws46Mode ws46_modes[] = {
+    /* GSM Digital Cellular Systems (GERAN only) */
+    { 12, MM_MODEM_MODE_2G },
+    /* UTRAN only */
+    { 22, MM_MODEM_MODE_3G },
+    /* 3GPP Systems (GERAN, UTRAN and E-UTRAN) */
+    { 25, MM_MODEM_MODE_ANY },
+    /* E-UTRAN only */
+    { 28, MM_MODEM_MODE_4G },
+    /* GERAN and UTRAN */
+    { 29, MM_MODEM_MODE_2G | MM_MODEM_MODE_3G },
+    /* GERAN and E-UTRAN */
+    { 30, MM_MODEM_MODE_2G | MM_MODEM_MODE_4G },
+    /* UERAN and E-UTRAN */
+    { 31, MM_MODEM_MODE_3G | MM_MODEM_MODE_4G },
+};
+
+GArray *
+mm_3gpp_parse_ws46_test_response (const gchar  *response,
+                                  GError      **error)
+{
+    GArray     *modes = NULL;
+    GRegex     *r;
+    GError     *inner_error = NULL;
+    GMatchInfo *match_info = NULL;
+    gchar      *full_list = NULL;
+    gchar     **split;
+    guint       i;
+    gboolean    supported_4g = FALSE;
+    gboolean    supported_3g = FALSE;
+    gboolean    supported_2g = FALSE;
+
+    r = g_regex_new ("(?:\\+WS46:)?\\s*\\((.*)\\)(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (inner_error)
+        goto out;
+
+    if (!g_match_info_matches (match_info)) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't match response");
+        goto out;
+    }
+
+    if (!(full_list = mm_get_string_unquoted_from_match_info (match_info, 1))) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Error parsing full list string");
+        goto out;
+    }
+
+    split = g_strsplit (full_list, ",", -1);
+    modes = g_array_new (FALSE, FALSE, sizeof (MMModemMode));
+
+    for (i = 0; split && split[i]; i++) {
+        guint val;
+        guint j;
+
+        if (!mm_get_uint_from_str (split[i], &val)) {
+            g_warning ("Invalid +WS46 mode reported: %s", split[i]);
+            continue;
+        }
+
+        for (j = 0; j < G_N_ELEMENTS (ws46_modes); j++) {
+            if (ws46_modes[j].ws46 == val) {
+                if (val != 25) {
+                    if (ws46_modes[j].mode & MM_MODEM_MODE_4G)
+                        supported_4g = TRUE;
+                    if (ws46_modes[j].mode & MM_MODEM_MODE_3G)
+                        supported_3g = TRUE;
+                    if (ws46_modes[j].mode & MM_MODEM_MODE_2G)
+                        supported_2g = TRUE;
+                }
+                g_array_append_val (modes, ws46_modes[j].mode);
+                break;
+            }
+        }
+
+        if (j == G_N_ELEMENTS (ws46_modes))
+            g_warning ("Unknown +WS46 mode reported: %s", split[i]);
+    }
+
+    g_strfreev (split);
+
+    if (modes->len == 0) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "No valid modes reported");
+        g_clear_pointer (&modes, g_array_unref);
+        goto out;
+    }
+
+    /* Fixup the ANY value, based on which are the supported modes */
+    for (i = 0; i < modes->len; i++) {
+        MMModemMode *mode;
+
+        mode = &g_array_index (modes, MMModemMode, i);
+        if (*mode == MM_MODEM_MODE_ANY) {
+            *mode = 0;
+            if (supported_2g)
+                *mode |= MM_MODEM_MODE_2G;
+            if (supported_3g)
+                *mode |= MM_MODEM_MODE_3G;
+            if (supported_4g)
+                *mode |= MM_MODEM_MODE_4G;
+
+            if (*mode == 0) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "No way to fixup the ANY value");
+                g_clear_pointer (&modes, g_array_unref);
+                goto out;
+            }
+        }
+    }
+
+out:
+    g_free (full_list);
+
+    g_clear_pointer (&match_info, g_match_info_free);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return NULL;
+    }
+
+    g_assert (modes && modes->len);
+    return modes;
+}
+
+/*************************************************************************/
 
 static void
 mm_3gpp_network_info_free (MM3gppNetworkInfo *info)
@@ -1393,6 +1536,247 @@ mm_3gpp_parse_crsm_response (const gchar *reply,
 }
 
 /*************************************************************************/
+/* +CESQ response parser */
+
+gboolean
+mm_3gpp_parse_cesq_response (const gchar  *response,
+                             guint        *out_rxlev,
+                             guint        *out_ber,
+                             guint        *out_rscp,
+                             guint        *out_ecn0,
+                             guint        *out_rsrq,
+                             guint        *out_rsrp,
+                             GError      **error)
+{
+    GRegex     *r;
+    GMatchInfo *match_info;
+    GError     *inner_error = NULL;
+    guint       rxlev = 0;
+    guint       ber = 0;
+    guint       rscp = 0;
+    guint       ecn0 = 0;
+    guint       rsrq = 0;
+    guint       rsrp = 0;
+    gboolean    success = FALSE;
+
+    g_assert (out_rxlev);
+    g_assert (out_ber);
+    g_assert (out_rscp);
+    g_assert (out_ecn0);
+    g_assert (out_rsrq);
+    g_assert (out_rsrp);
+
+    /* Response may be e.g.:
+     * +CESQ: 99,99,255,255,20,80
+     */
+    r = g_regex_new ("\\+CESQ: (\\d+),(\\d+),(\\d+),(\\d+),(\\d+),(\\d+)(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (!inner_error && g_match_info_matches (match_info)) {
+        if (!mm_get_uint_from_match_info (match_info, 1, &rxlev)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RXLEV");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 2, &ber)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read BER");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 3, &rscp)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RSCP");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 4, &ecn0)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read Ec/N0");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 5, &rsrq)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RSRQ");
+            goto out;
+        }
+        if (!mm_get_uint_from_match_info (match_info, 6, &rsrp)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "Couldn't read RSRP");
+            goto out;
+        }
+        success = TRUE;
+    }
+
+out:
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    if (!success) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Couldn't parse +CESQ response: %s", response);
+        return FALSE;
+    }
+
+    *out_rxlev = rxlev;
+    *out_ber = ber;
+    *out_rscp = rscp;
+    *out_ecn0 = ecn0;
+    *out_rsrq = rsrq;
+    *out_rsrp = rsrp;
+    return TRUE;
+}
+
+static gboolean
+rxlev_to_rssi (guint    rxlev,
+               gdouble *out_rssi)
+{
+    if (rxlev <= 63) {
+        *out_rssi = -111.0 + rxlev;
+        return TRUE;
+    }
+
+    if (rxlev != 99)
+        mm_warn ("unexpected rxlev: %u", rxlev);
+    return FALSE;
+}
+
+static gboolean
+rscp_level_to_rscp (guint    rscp_level,
+                    gdouble *out_rscp)
+{
+    if (rscp_level <= 96) {
+        *out_rscp = -121.0 + rscp_level;
+        return TRUE;
+    }
+
+    if (rscp_level != 255)
+        mm_warn ("unexpected rscp level: %u", rscp_level);
+    return FALSE;
+}
+
+static gboolean
+ecn0_level_to_ecio (guint    ecn0_level,
+                    gdouble *out_ecio)
+{
+    if (ecn0_level <= 49) {
+        *out_ecio = -24.5 + (((gdouble) ecn0_level) * 0.5);
+        return TRUE;
+    }
+
+    if (ecn0_level != 255)
+        mm_warn ("unexpected Ec/N0 level: %u", ecn0_level);
+    return FALSE;
+}
+
+static gboolean
+rsrq_level_to_rsrq (guint    rsrq_level,
+                    gdouble *out_rsrq)
+{
+    if (rsrq_level <= 34) {
+        *out_rsrq = -20.0 + (((gdouble) rsrq_level) * 0.5);
+        return TRUE;
+    }
+
+    if (rsrq_level != 255)
+        mm_warn ("unexpected RSRQ level: %u", rsrq_level);
+    return FALSE;
+}
+
+static gboolean
+rsrp_level_to_rsrp (guint    rsrp_level,
+                    gdouble *out_rsrp)
+{
+    if (rsrp_level <= 97) {
+        *out_rsrp = -141.0 + rsrp_level;
+        return TRUE;
+    }
+
+    if (rsrp_level != 255)
+        mm_warn ("unexpected RSRP level: %u", rsrp_level);
+    return FALSE;
+}
+
+gboolean
+mm_3gpp_cesq_response_to_signal_info (const gchar  *response,
+                                      MMSignal    **out_gsm,
+                                      MMSignal    **out_umts,
+                                      MMSignal    **out_lte,
+                                      GError      **error)
+{
+    guint     rxlev = 0;
+    guint     ber = 0;
+    guint     rscp_level = 0;
+    guint     ecn0_level = 0;
+    guint     rsrq_level = 0;
+    guint     rsrp_level = 0;
+    gdouble   rssi = -G_MAXDOUBLE;
+    gdouble   rscp = -G_MAXDOUBLE;
+    gdouble   ecio = -G_MAXDOUBLE;
+    gdouble   rsrq = -G_MAXDOUBLE;
+    gdouble   rsrp = -G_MAXDOUBLE;
+    MMSignal *gsm = NULL;
+    MMSignal *umts = NULL;
+    MMSignal *lte = NULL;
+
+    if (!mm_3gpp_parse_cesq_response (response,
+                                      &rxlev, &ber,
+                                      &rscp_level, &ecn0_level,
+                                      &rsrq_level, &rsrp_level,
+                                      error))
+        return FALSE;
+
+    /* GERAN RSSI */
+    if (rxlev_to_rssi (rxlev, &rssi)) {
+        gsm = mm_signal_new ();
+        mm_signal_set_rssi (gsm, rssi);
+    }
+
+    /* ignore BER */
+
+    /* UMTS RSCP */
+    if (rscp_level_to_rscp (rscp_level, &rscp)) {
+        umts = mm_signal_new ();
+        mm_signal_set_rscp (umts, rscp);
+    }
+
+    /* UMTS EcIo (assumed EcN0) */
+    if (ecn0_level_to_ecio (ecn0_level, &ecio)) {
+        if (!umts)
+            umts = mm_signal_new ();
+        mm_signal_set_ecio (umts, ecio);
+    }
+
+    /* LTE RSRQ */
+    if (rsrq_level_to_rsrq (rsrq_level, &rsrq)) {
+        lte = mm_signal_new ();
+        mm_signal_set_rsrq (lte, rsrq);
+    }
+
+    /* LTE RSRP */
+    if (rsrp_level_to_rsrp (rsrp_level, &rsrp)) {
+        if (!lte)
+            lte = mm_signal_new ();
+        mm_signal_set_rsrp (lte, rsrp);
+    }
+
+    if (!gsm && !umts && !lte) {
+        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                     "Couldn't build detailed signal info");
+        return FALSE;
+    }
+
+    if (gsm)
+        *out_gsm = gsm;
+    if (umts)
+        *out_umts = umts;
+    if (lte)
+        *out_lte = lte;
+
+    return TRUE;
+}
+
+/*************************************************************************/
 
 static MMSmsStorage
 storage_from_str (const gchar *str)
@@ -2089,6 +2473,7 @@ MMModemAccessTechnology
 mm_string_to_access_tech (const gchar *string)
 {
     MMModemAccessTechnology act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
+    gsize len;
 
     g_return_val_if_fail (string != NULL, MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
 
@@ -2102,14 +2487,15 @@ mm_string_to_access_tech (const gchar *string)
     else if (strcasestr (string, "HSPA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_HSPA;
 
-
     if (strcasestr (string, "HSUPA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_HSUPA;
 
     if (strcasestr (string, "HSDPA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_HSDPA;
 
-    if (strcasestr (string, "UMTS") || strcasestr (string, "3G"))
+    if (strcasestr (string, "UMTS") ||
+        strcasestr (string, "3G") ||
+        strcasestr (string, "WCDMA"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_UMTS;
 
     if (strcasestr (string, "EDGE"))
@@ -2132,6 +2518,17 @@ mm_string_to_access_tech (const gchar *string)
 
     if (strcasestr (string, "1xRTT") || strcasestr (string, "CDMA2000 1X"))
         act |= MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
+
+    /* Check "EVDO" and "CDMA" as standalone strings since their characters
+     * are included in other strings too.
+     */
+    len = strlen (string);
+    if (strncmp (string, "EVDO", 4) && (len >= 4 && !isalnum (string[4])))
+        act |= MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
+    if (strncmp (string, "CDMA", 4) && (len >= 4 && !isalnum (string[4])))
+        act |= MM_MODEM_ACCESS_TECHNOLOGY_1XRTT;
+    if (strncmp (string, "CDMA-EVDO", 9) && (len >= 9 && !isalnum (string[9])))
+        act |= MM_MODEM_ACCESS_TECHNOLOGY_1XRTT | MM_MODEM_ACCESS_TECHNOLOGY_EVDO0;
 
     return act;
 }

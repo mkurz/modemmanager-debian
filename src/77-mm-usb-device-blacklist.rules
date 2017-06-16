@@ -172,4 +172,21 @@ ATTRS{idVendor}=="1d9d", ATTRS{idProduct}=="1010", ENV{ID_MM_DEVICE_IGNORE}="1"
 # Sigma Sport Docking Station TOPLINE 2012
 ATTRS{idVendor}=="1d9d", ATTRS{idProduct}=="1011", ENV{ID_MM_DEVICE_IGNORE}="1"
 
+# Telit LE866 flashing device
+ATTRS{idVendor}=="216f", ATTRS{idProduct}=="0051", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# Analog Devices ADALM-PLUTO (PlutoSDR)
+ATTRS{idVendor}=="0456", ATTRS{idProduct}=="b673", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# Renesas development and promotion boards
+ATTRS{idVendor}=="045B", ATTRS{idProduct}=="0212", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="0409", ATTRS{idProduct}=="0063", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# Analog Devices EVAL-ADXL362Z-DB
+ATTRS{idVendor}=="064B", ATTRS{idProduct}=="7825", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# keyboard.io devices
+ATTRS{idVendor}=="1209", ATTRS{idProduct}=="2300", ENV{ID_MM_DEVICE_IGNORE}="1"
+ATTRS{idVendor}=="1209", ATTRS{idProduct}=="2301", ENV{ID_MM_DEVICE_IGNORE}="1"
+
 LABEL="mm_usb_device_blacklist_end"
