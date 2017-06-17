@@ -1,3 +1,11 @@
+modemmanager (1.6.8-1) unstable; urgency=medium
+
+  * New upstream version 1.6.8
+  * Drop obsolete Breaks and Replaces from pre-jessie.
+  * Move D-Bus interface files into modemmanager-dev package
+
+ -- Michael Biebl <biebl@debian.org>  Sat, 17 Jun 2017 13:40:08 +0200
+
 modemmanager (1.6.4-1) unstable; urgency=medium
 
   * New upstream release.
