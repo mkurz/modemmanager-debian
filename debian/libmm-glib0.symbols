@@ -1367,6 +1367,7 @@ libmm-glib.so.0 libmm-glib0 #MINVER#
  mm_signal_get_dictionary@Base 1.2.0
  mm_signal_get_ecio@Base 1.2.0
  mm_signal_get_io@Base 1.2.0
+ mm_signal_get_rscp@Base 1.6.8
  mm_signal_get_rsrp@Base 1.2.0
  mm_signal_get_rsrq@Base 1.2.0
  mm_signal_get_rssi@Base 1.2.0
@@ -1377,6 +1378,7 @@ libmm-glib.so.0 libmm-glib0 #MINVER#
  mm_signal_new_from_dictionary@Base 1.2.0
  mm_signal_set_ecio@Base 1.2.0
  mm_signal_set_io@Base 1.2.0
+ mm_signal_set_rscp@Base 1.6.8
  mm_signal_set_rsrp@Base 1.2.0
  mm_signal_set_rsrq@Base 1.2.0
  mm_signal_set_rssi@Base 1.2.0
