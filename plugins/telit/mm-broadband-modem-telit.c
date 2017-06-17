@@ -630,6 +630,18 @@ response_processor_psnt_ignore_at_errors (MMBaseModem *self,
         case 3:
             *result = g_variant_new_uint32 (MM_MODEM_ACCESS_TECHNOLOGY_HSDPA);
             return TRUE;
+        case 4:
+            if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self)))
+                *result = g_variant_new_uint32 (MM_MODEM_ACCESS_TECHNOLOGY_LTE);
+            else
+                *result = g_variant_new_uint32 (MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
+            return TRUE;
+        case 5:
+            if (mm_iface_modem_is_3gpp_lte (MM_IFACE_MODEM (self))) {
+                *result = g_variant_new_uint32 (MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN);
+                return TRUE;
+            }
+            /* Fall-through since #PSNT: 5 is not supported in other than lte modems */
         default:
             break;
         }

@@ -128,6 +128,36 @@ test_ws46_response_telit_le866 (void)
     test_ws46_response (str, expected, G_N_ELEMENTS (expected));
 }
 
+static void
+test_ws46_response_range_1 (void)
+{
+    static const MMModemMode expected[] = {
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_3G | MM_MODEM_MODE_4G,
+    };
+    const gchar *str = "+WS46: (29-31)";
+
+    test_ws46_response (str, expected, G_N_ELEMENTS (expected));
+}
+
+static void
+test_ws46_response_range_2 (void)
+{
+    static const MMModemMode expected[] = {
+        MM_MODEM_MODE_2G,
+        MM_MODEM_MODE_3G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G | MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_3G,
+        MM_MODEM_MODE_2G | MM_MODEM_MODE_4G,
+        MM_MODEM_MODE_3G | MM_MODEM_MODE_4G,
+    };
+    const gchar *str = "+WS46: (12,22,25,28-31)";
+
+    test_ws46_response (str, expected, G_N_ELEMENTS (expected));
+}
+
 /*****************************************************************************/
 /* Test CMGL responses */
 
@@ -2954,6 +2984,49 @@ test_cesq_response_to_signal (void)
 
 /*****************************************************************************/
 
+typedef struct {
+    gchar *str;
+    gint expected_number_list[9];
+} TestParseNumberList;
+
+static const TestParseNumberList test_parse_number_list_item [] = {
+    { "1-6",          { 1, 2, 3, 4, 5, 6, -1 } },
+    { "0,1,2,4,6",    { 0, 1, 2, 4, 6, -1 } },
+    { "1,3-5,7,9-11", { 1, 3, 4, 5, 7, 9, 10, 11, -1 } },
+    { "9-11,7,3-5",   { 3, 4, 5, 7, 9, 10, 11, -1 } },
+    { "",             { -1 } },
+    { NULL,           { -1 } },
+};
+
+static void
+test_parse_uint_list (void)
+{
+    guint i;
+
+    for (i = 0; i < G_N_ELEMENTS (test_parse_number_list_item); i++) {
+        GArray *array;
+        GError *error = NULL;
+        guint   j;
+
+        array = mm_parse_uint_list (test_parse_number_list_item[i].str, &error);
+        g_assert_no_error (error);
+        if (test_parse_number_list_item[i].expected_number_list[0] == -1) {
+            g_assert (!array);
+            continue;
+        }
+
+        g_assert (array);
+        for (j = 0; j < array->len; j++) {
+            g_assert_cmpint (test_parse_number_list_item[i].expected_number_list[j], !=, -1);
+            g_assert_cmpuint (test_parse_number_list_item[i].expected_number_list[j], ==, g_array_index (array, guint, j));
+        }
+        g_assert_cmpint (test_parse_number_list_item[i].expected_number_list[array->len], ==, -1);
+        g_array_unref (array);
+    }
+}
+
+/*****************************************************************************/
+
 void
 _mm_log (const char *loc,
          const char *func,
@@ -2994,6 +3067,8 @@ int main (int argc, char **argv)
     g_test_suite_add (suite, TESTCASE (test_ws46_response_generic_2g3g_v2, NULL));
     g_test_suite_add (suite, TESTCASE (test_ws46_response_cinterion, NULL));
     g_test_suite_add (suite, TESTCASE (test_ws46_response_telit_le866, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ws46_response_range_1, NULL));
+    g_test_suite_add (suite, TESTCASE (test_ws46_response_range_2, NULL));
 
     g_test_suite_add (suite, TESTCASE (test_cops_response_tm506, NULL));
     g_test_suite_add (suite, TESTCASE (test_cops_response_gt3gplus, NULL));
@@ -3138,6 +3213,8 @@ int main (int argc, char **argv)
 
     g_test_suite_add (suite, TESTCASE (test_cesq_response, NULL));
     g_test_suite_add (suite, TESTCASE (test_cesq_response_to_signal, NULL));
+
+    g_test_suite_add (suite, TESTCASE (test_parse_uint_list, NULL));
 
     result = g_test_run ();
 

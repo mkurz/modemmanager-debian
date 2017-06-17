@@ -131,6 +131,105 @@ mm_split_string_groups (const gchar *str)
 
 /*****************************************************************************/
 
+static int uint_compare_func (gconstpointer a, gconstpointer b)
+{
+   return (*(guint *)a - *(guint *)b);
+}
+
+GArray *
+mm_parse_uint_list (const gchar  *str,
+                    GError      **error)
+{
+    GArray *array;
+    gchar  *dupstr;
+    gchar  *aux;
+    GError *inner_error = NULL;
+
+    if (!str || !str[0])
+        return NULL;
+
+    /* Parses into a GArray of guints, the list of numbers given in the string,
+     * also supporting number intervals.
+     * E.g.:
+     *   1-6      --> 1,2,3,4,5,6
+     *   1,2,4-6  --> 1,2,4,5,6
+     */
+    array = g_array_new (FALSE, FALSE, sizeof (guint));
+    aux = dupstr = g_strdup (str);
+
+    while (aux) {
+        gchar *next;
+        gchar *interval;
+
+        next = strchr (aux, ',');
+        if (next) {
+            *next = '\0';
+            next++;
+        }
+
+        interval = strchr (aux, '-');
+        if (interval) {
+            guint start = 0;
+            guint stop = 0;
+
+            *interval = '\0';
+            interval++;
+
+            if (!mm_get_uint_from_str (aux, &start)) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "couldn't parse interval start integer: '%s'", aux);
+                goto out;
+            }
+            if (!mm_get_uint_from_str (interval, &stop)) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "couldn't parse interval stop integer: '%s'", interval);
+                goto out;
+            }
+
+            if (start > stop) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "interval start (%u) cannot be bigger than interval stop (%u)", start, stop);
+                goto out;
+            }
+
+            for (; start <= stop; start++)
+                g_array_append_val (array, start);
+        } else {
+            guint num;
+
+            if (!mm_get_uint_from_str (aux, &num)) {
+                inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                           "couldn't parse integer: '%s'", aux);
+                goto out;
+            }
+
+            g_array_append_val (array, num);
+        }
+
+        aux = next;
+    }
+
+    if (!array->len)
+        inner_error = g_error_new (MM_CORE_ERROR,
+                                   MM_CORE_ERROR_FAILED,
+                                   "couldn't parse list of integers: '%s'", str);
+    else
+        g_array_sort (array, uint_compare_func);
+
+out:
+    g_free (dupstr);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        g_array_unref (array);
+        return NULL;
+    }
+
+    return array;
+}
+
+/*****************************************************************************/
+
 guint
 mm_count_bits_set (gulong number)
 {
@@ -665,12 +764,14 @@ mm_3gpp_parse_ws46_test_response (const gchar  *response,
                                   GError      **error)
 {
     GArray     *modes = NULL;
+    GArray     *tech_values = NULL;
     GRegex     *r;
     GError     *inner_error = NULL;
     GMatchInfo *match_info = NULL;
     gchar      *full_list = NULL;
-    gchar     **split;
+    guint       val;
     guint       i;
+    guint       j;
     gboolean    supported_4g = FALSE;
     gboolean    supported_3g = FALSE;
     gboolean    supported_2g = FALSE;
@@ -692,17 +793,13 @@ mm_3gpp_parse_ws46_test_response (const gchar  *response,
         goto out;
     }
 
-    split = g_strsplit (full_list, ",", -1);
+    if (!(tech_values = mm_parse_uint_list (full_list, &inner_error)))
+        goto out;
+
     modes = g_array_new (FALSE, FALSE, sizeof (MMModemMode));
 
-    for (i = 0; split && split[i]; i++) {
-        guint val;
-        guint j;
-
-        if (!mm_get_uint_from_str (split[i], &val)) {
-            g_warning ("Invalid +WS46 mode reported: %s", split[i]);
-            continue;
-        }
+    for (i = 0; i < tech_values->len; i++) {
+        val = g_array_index (tech_values, guint, i);
 
         for (j = 0; j < G_N_ELEMENTS (ws46_modes); j++) {
             if (ws46_modes[j].ws46 == val) {
@@ -720,10 +817,8 @@ mm_3gpp_parse_ws46_test_response (const gchar  *response,
         }
 
         if (j == G_N_ELEMENTS (ws46_modes))
-            g_warning ("Unknown +WS46 mode reported: %s", split[i]);
+            g_warning ("Unknown +WS46 mode reported: %u", val);
     }
-
-    g_strfreev (split);
 
     if (modes->len == 0) {
         inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED, "No valid modes reported");
@@ -754,6 +849,9 @@ mm_3gpp_parse_ws46_test_response (const gchar  *response,
     }
 
 out:
+    if (tech_values)
+        g_array_unref (tech_values);
+
     g_free (full_list);
 
     g_clear_pointer (&match_info, g_match_info_free);
