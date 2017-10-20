@@ -1,8 +1,7 @@
 Source: modemmanager
 Section: net
 Priority: optional
-Maintainer: Utopia Maintenance Team <pkg-utopia-maintainers@lists.alioth.debian.org>
-Uploaders: Michael Biebl <biebl@debian.org>, Mathieu Trudel-Lapierre <mathieu-tl@ubuntu.com>
+Maintainer: Mathieu Trudel-Lapierre <mathieu-tl@ubuntu.com>
 Build-Depends: debhelper (>= 10),
                automake,
                libtool,
