@@ -896,12 +896,12 @@ connect_enable_indications_ipv4_ready (QmiClientWds *client,
 
     ctx->event_report_ipv4_indication_id =
         connect_enable_indications_ready (client, res, ctx->self, &ctx->error_ipv4);
-    if (!ctx->event_report_ipv4_indication_id) {
-        ctx->step = CONNECT_STEP_LAST;
-        return;
-    }
 
-    ctx->step++;
+    if (!ctx->event_report_ipv4_indication_id)
+        ctx->step = CONNECT_STEP_LAST;
+    else
+        ctx->step++;
+
     connect_context_step (ctx);
 }
 
@@ -914,12 +914,12 @@ connect_enable_indications_ipv6_ready (QmiClientWds *client,
 
     ctx->event_report_ipv6_indication_id =
         connect_enable_indications_ready (client, res, ctx->self, &ctx->error_ipv6);
-    if (!ctx->event_report_ipv6_indication_id) {
-        ctx->step = CONNECT_STEP_LAST;
-        return;
-    }
 
-    ctx->step++;
+    if (!ctx->event_report_ipv6_indication_id)
+        ctx->step = CONNECT_STEP_LAST;
+    else
+        ctx->step++;
+
     connect_context_step (ctx);
 }
 
@@ -1156,8 +1156,11 @@ connect_context_step (ConnectContext *ctx)
                                                ctx->cancellable,
                                                (GAsyncReadyCallback) connect_enable_indications_ipv4_ready,
                                                ctx);
-#endif
         return;
+#else
+        /* Just fall down */
+        ctx->step++;
+#endif
 
     case CONNECT_STEP_START_NETWORK_IPV4: {
         QmiMessageWdsStartNetworkInput *input;
@@ -1259,8 +1262,11 @@ connect_context_step (ConnectContext *ctx)
                                                ctx->cancellable,
                                                (GAsyncReadyCallback) connect_enable_indications_ipv6_ready,
                                                ctx);
-#endif
         return;
+#else
+        /* Just fall down */
+        ctx->step++;
+#endif
 
     case CONNECT_STEP_START_NETWORK_IPV6: {
         QmiMessageWdsStartNetworkInput *input;
@@ -1579,11 +1585,37 @@ reset_bearer_connection (MMBearerQmi *self,
                          gboolean reset_ipv6)
 {
     if (reset_ipv4) {
+        if (self->priv->client_ipv4) {
+            if (self->priv->packet_service_status_ipv4_indication_id)
+                common_setup_cleanup_packet_service_status_unsolicited_events (self,
+                                                                               self->priv->client_ipv4,
+                                                                               FALSE,
+                                                                               &self->priv->packet_service_status_ipv4_indication_id);
+#if QMI_CHECK_VERSION (1,18,0)
+            if (self->priv->event_report_ipv4_indication_id)
+                cleanup_event_report_unsolicited_events (self,
+                                                         self->priv->client_ipv4,
+                                                         &self->priv->event_report_ipv4_indication_id);
+#endif
+        }
         self->priv->packet_data_handle_ipv4 = 0;
         g_clear_object (&self->priv->client_ipv4);
     }
 
     if (reset_ipv6) {
+        if (self->priv->client_ipv6) {
+            if (self->priv->packet_service_status_ipv6_indication_id)
+                common_setup_cleanup_packet_service_status_unsolicited_events (self,
+                                                                               self->priv->client_ipv6,
+                                                                               FALSE,
+                                                                               &self->priv->packet_service_status_ipv6_indication_id);
+#if QMI_CHECK_VERSION (1,18,0)
+            if (self->priv->event_report_ipv6_indication_id)
+                cleanup_event_report_unsolicited_events (self,
+                                                         self->priv->client_ipv6,
+                                                         &self->priv->event_report_ipv6_indication_id);
+#endif
+        }
         self->priv->packet_data_handle_ipv6 = 0;
         g_clear_object (&self->priv->client_ipv6);
     }

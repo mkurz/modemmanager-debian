@@ -181,7 +181,8 @@ packet_statistics_query_ready (MbimDevice *device,
         g_simple_async_result_take_error (ctx->result, error);
 
     reload_stats_context_complete_and_free (ctx);
-    mbim_message_unref (response);
+    if (response)
+        mbim_message_unref (response);
 }
 
 static void
@@ -220,6 +221,7 @@ typedef enum {
     CONNECT_STEP_FIRST,
     CONNECT_STEP_PACKET_SERVICE,
     CONNECT_STEP_PROVISIONED_CONTEXTS,
+    CONNECT_STEP_ENSURE_DISCONNECTED,
     CONNECT_STEP_CONNECT,
     CONNECT_STEP_IP_CONFIGURATION,
     CONNECT_STEP_LAST
@@ -319,7 +321,7 @@ ip_configuration_query_ready (MbimDevice *device,
         mm_dbg ("IPv4 configuration available: '%s'", str);
         g_free (str);
 
-        if (ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_ADDRESS) {
+        if ((ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_ADDRESS) && ipv4addresscount) {
             guint i;
 
             mm_dbg ("  IP addresses (%u)", ipv4addresscount);
@@ -332,7 +334,7 @@ ip_configuration_query_ready (MbimDevice *device,
             }
         }
 
-        if (ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_GATEWAY) {
+        if ((ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_GATEWAY) && ipv4gateway) {
             addr = g_inet_address_new_from_bytes ((guint8 *)ipv4gateway, G_SOCKET_FAMILY_IPV4);
             str = g_inet_address_to_string (addr);
             mm_dbg ("  Gateway: '%s'", str);
@@ -340,7 +342,7 @@ ip_configuration_query_ready (MbimDevice *device,
             g_object_unref (addr);
         }
 
-        if (ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_DNS) {
+        if ((ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_DNS) && ipv4dnsservercount) {
             guint i;
 
             mm_dbg ("  DNS addresses (%u)", ipv4dnsservercount);
@@ -355,7 +357,7 @@ ip_configuration_query_ready (MbimDevice *device,
             }
         }
 
-        if (ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_MTU) {
+        if ((ipv4configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_MTU) && ipv4mtu) {
             mm_dbg ("  MTU: '%u'", ipv4mtu);
         }
 
@@ -365,7 +367,7 @@ ip_configuration_query_ready (MbimDevice *device,
         mm_dbg ("IPv6 configuration available: '%s'", str);
         g_free (str);
 
-        if (ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_ADDRESS) {
+        if ((ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_ADDRESS) && ipv6addresscount) {
             guint i;
 
             mm_dbg ("  IP addresses (%u)", ipv6addresscount);
@@ -378,7 +380,7 @@ ip_configuration_query_ready (MbimDevice *device,
             }
         }
 
-        if (ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_GATEWAY) {
+        if ((ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_GATEWAY) && ipv6gateway) {
             addr = g_inet_address_new_from_bytes ((guint8 *)ipv6gateway, G_SOCKET_FAMILY_IPV6);
             str = g_inet_address_to_string (addr);
             mm_dbg ("  Gateway: '%s'", str);
@@ -386,7 +388,7 @@ ip_configuration_query_ready (MbimDevice *device,
             g_object_unref (addr);
         }
 
-        if (ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_DNS) {
+        if ((ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_DNS) && ipv6dnsservercount) {
             guint i;
 
             mm_dbg ("  DNS addresses (%u)", ipv6dnsservercount);
@@ -401,7 +403,7 @@ ip_configuration_query_ready (MbimDevice *device,
             }
         }
 
-        if (ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_MTU) {
+        if ((ipv6configurationavailable & MBIM_IP_CONFIGURATION_AVAILABLE_FLAG_MTU) && ipv6mtu) {
             mm_dbg ("  MTU: '%u'", ipv6mtu);
         }
 
@@ -637,6 +639,23 @@ connect_set_ready (MbimDevice *device,
 }
 
 static void
+ensure_disconnected_ready (MbimDevice     *device,
+                           GAsyncResult   *res,
+                           ConnectContext *ctx)
+{
+    MbimMessage *response;
+
+    /* Ignore all errors, just go on */
+    response = mbim_device_command_finish (device, res, NULL);
+    if (response)
+        mbim_message_unref (response);
+
+    /* Keep on */
+    ctx->step++;
+    connect_context_step (ctx);
+}
+
+static void
 provisioned_contexts_query_ready (MbimDevice *device,
                                   GAsyncResult *res,
                                   ConnectContext *ctx)
@@ -813,6 +832,37 @@ connect_context_step (ConnectContext *ctx)
                              ctx);
         mbim_message_unref (message);
         return;
+
+    case CONNECT_STEP_ENSURE_DISCONNECTED: {
+        MbimMessage *message;
+        GError *error = NULL;
+
+        message = (mbim_message_connect_set_new (
+                       ctx->self->priv->session_id,
+                       MBIM_ACTIVATION_COMMAND_DEACTIVATE,
+                       "",
+                       "",
+                       "",
+                       MBIM_COMPRESSION_NONE,
+                       MBIM_AUTH_PROTOCOL_NONE,
+                       MBIM_CONTEXT_IP_TYPE_DEFAULT,
+                       mbim_uuid_from_context_type (MBIM_CONTEXT_TYPE_INTERNET),
+                       &error));
+        if (!message) {
+            g_simple_async_result_take_error (ctx->result, error);
+            connect_context_complete_and_free (ctx);
+            return;
+        }
+
+        mbim_device_command (ctx->device,
+                             message,
+                             30,
+                             NULL,
+                             (GAsyncReadyCallback)ensure_disconnected_ready,
+                             ctx);
+        mbim_message_unref (message);
+        return;
+    }
 
     case CONNECT_STEP_CONNECT: {
         const gchar *apn;
@@ -1131,11 +1181,15 @@ disconnect_set_ready (MbimDevice *device,
         } else if (g_error_matches (error,
                                     MBIM_STATUS_ERROR,
                                     MBIM_STATUS_ERROR_CONTEXT_NOT_ACTIVATED)) {
-            mm_dbg ("Session ID '%u' already disconnected.", session_id);
+            if (parsed_result)
+                mm_dbg ("Context not activated: session ID '%u' already disconnected", session_id);
+            else
+                mm_dbg ("Context not activated: already disconnected");
+
             g_clear_error (&error);
             g_clear_error (&inner_error);
         } else if (g_error_matches (error, MBIM_STATUS_ERROR, MBIM_STATUS_ERROR_FAILURE)) {
-            if (nw_error) {
+            if (parsed_result && nw_error != 0) {
                 g_error_free (error);
                 error = mm_mobile_equipment_error_from_mbim_nw_error (nw_error);
             }
