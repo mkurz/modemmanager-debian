@@ -643,7 +643,7 @@ dial_3gpp (MMBroadbandBearer *self,
  */
 
 static void
-get_ip_config_3gpp_ready (MMBroadbandModem *modem,
+get_ip_config_3gpp_ready (MMBroadbandBearer *self,
                           GAsyncResult *res,
                           DetailedConnectContext *ctx)
 {
@@ -651,11 +651,11 @@ get_ip_config_3gpp_ready (MMBroadbandModem *modem,
     MMBearerIpConfig *ipv6_config = NULL;
     GError *error = NULL;
 
-    if (!MM_BROADBAND_BEARER_GET_CLASS (ctx->self)->get_ip_config_3gpp_finish (ctx->self,
-                                                                               res,
-                                                                               &ipv4_config,
-                                                                               &ipv6_config,
-                                                                               &error)) {
+    if (!MM_BROADBAND_BEARER_GET_CLASS (self)->get_ip_config_3gpp_finish (self,
+                                                                          res,
+                                                                          &ipv4_config,
+                                                                          &ipv6_config,
+                                                                          &error)) {
         g_simple_async_result_take_error (ctx->result, error);
         detailed_connect_context_complete_and_free (ctx);
         return;
@@ -678,7 +678,7 @@ get_ip_config_3gpp_ready (MMBroadbandModem *modem,
 }
 
 static void
-dial_3gpp_ready (MMBroadbandModem *modem,
+dial_3gpp_ready (MMBroadbandBearer *self,
                  GAsyncResult *res,
                  DetailedConnectContext *ctx)
 {
@@ -687,10 +687,10 @@ dial_3gpp_ready (MMBroadbandModem *modem,
     MMBearerIpConfig *ipv6_config = NULL;
     GError *error = NULL;
 
-    ctx->data = MM_BROADBAND_BEARER_GET_CLASS (ctx->self)->dial_3gpp_finish (ctx->self, res, &error);
+    ctx->data = MM_BROADBAND_BEARER_GET_CLASS (self)->dial_3gpp_finish (self, res, &error);
     if (!ctx->data) {
         /* Clear CID when it failed to connect. */
-        ctx->self->priv->cid = 0;
+        self->priv->cid = 0;
         g_simple_async_result_take_error (ctx->result, error);
         detailed_connect_context_complete_and_free (ctx);
         return;
@@ -701,11 +701,11 @@ dial_3gpp_ready (MMBroadbandModem *modem,
     if (MM_IS_PORT_SERIAL_AT (ctx->data))
         ctx->close_data_on_exit = TRUE;
 
-    if (MM_BROADBAND_BEARER_GET_CLASS (ctx->self)->get_ip_config_3gpp &&
-        MM_BROADBAND_BEARER_GET_CLASS (ctx->self)->get_ip_config_3gpp_finish) {
+    if (MM_BROADBAND_BEARER_GET_CLASS (self)->get_ip_config_3gpp &&
+        MM_BROADBAND_BEARER_GET_CLASS (self)->get_ip_config_3gpp_finish) {
         /* Launch specific IP config retrieval */
-        MM_BROADBAND_BEARER_GET_CLASS (ctx->self)->get_ip_config_3gpp (
-            ctx->self,
+        MM_BROADBAND_BEARER_GET_CLASS (self)->get_ip_config_3gpp (
+            self,
             MM_BROADBAND_MODEM (ctx->modem),
             ctx->primary,
             ctx->secondary,
@@ -1394,6 +1394,9 @@ data_flash_cdma_ready (MMPortSerial *data,
         g_error_free (error);
     }
 
+    /* Run init port sequence in the data port */
+    mm_port_serial_at_run_init_sequence (MM_PORT_SERIAL_AT (data));
+
     g_simple_async_result_set_op_res_gboolean (ctx->result, TRUE);
     detailed_disconnect_context_complete_and_free (ctx);
 }
@@ -1404,6 +1407,8 @@ data_reopen_cdma_ready (MMPortSerial *data,
                         DetailedDisconnectContext *ctx)
 {
     GError *error = NULL;
+
+    g_object_set (data, MM_PORT_SERIAL_AT_INIT_SEQUENCE_ENABLED, TRUE, NULL);
 
     if (!mm_port_serial_reopen_finish (data, res, &error)) {
         /* Fatal */
@@ -1444,6 +1449,10 @@ disconnect_cdma (MMBroadbandBearer *self,
                                            data,
                                            callback,
                                            user_data);
+
+    /* We don't want to run init sequence right away during the reopen, as we're
+     * going to flash afterwards. */
+    g_object_set (data, MM_PORT_SERIAL_AT_INIT_SEQUENCE_ENABLED, FALSE, NULL);
 
     /* Fully reopen the port before flashing */
     mm_dbg ("Reopening data port (%s)...", mm_port_get_device (MM_PORT (ctx->data)));
@@ -1511,6 +1520,9 @@ data_flash_3gpp_ready (MMPortSerial *data,
         g_error_free (error);
     }
 
+    /* Run init port sequence in the data port */
+    mm_port_serial_at_run_init_sequence (MM_PORT_SERIAL_AT (data));
+
     /* Don't bother doing the CGACT again if it was already done on the
      * primary or secondary port */
     if (ctx->cgact_sent) {
@@ -1548,6 +1560,8 @@ data_reopen_3gpp_ready (MMPortSerial *data,
 {
     GError *error = NULL;
 
+    g_object_set (data, MM_PORT_SERIAL_AT_INIT_SEQUENCE_ENABLED, TRUE, NULL);
+
     if (!mm_port_serial_reopen_finish (data, res, &error)) {
         /* Fatal */
         g_simple_async_result_take_error (ctx->result, error);
@@ -1567,6 +1581,10 @@ data_reopen_3gpp_ready (MMPortSerial *data,
 static void
 data_reopen_3gpp (DetailedDisconnectContext *ctx)
 {
+    /* We don't want to run init sequence right away during the reopen, as we're
+     * going to flash afterwards. */
+    g_object_set (ctx->data, MM_PORT_SERIAL_AT_INIT_SEQUENCE_ENABLED, FALSE, NULL);
+
     /* Fully reopen the port before flashing */
     mm_dbg ("Reopening data port (%s)...", mm_port_get_device (MM_PORT (ctx->data)));
     mm_port_serial_reopen (MM_PORT_SERIAL (ctx->data),
@@ -1947,6 +1965,7 @@ crm_range_ready (MMBaseModem *modem,
                 /* Fine, go on with next step */
                 ctx->step++;
                 interface_initialization_step (ctx);
+                return;
             }
 
             g_assert (error == NULL);

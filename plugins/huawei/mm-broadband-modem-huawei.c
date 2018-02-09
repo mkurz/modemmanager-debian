@@ -1956,9 +1956,8 @@ parent_3gpp_setup_unsolicited_events_ready (MMIfaceModem3gpp *self,
     else {
         /* Our own setup now */
         set_3gpp_unsolicited_events_handlers (MM_BROADBAND_MODEM_HUAWEI (self), TRUE);
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     }
-
     g_simple_async_result_complete (simple);
     g_object_unref (simple);
 }
@@ -1992,7 +1991,7 @@ parent_3gpp_cleanup_unsolicited_events_ready (MMIfaceModem3gpp *self,
     if (!iface_modem_3gpp_parent->cleanup_unsolicited_events_finish (self, res, &error))
         g_simple_async_result_take_error (simple, error);
     else
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     g_simple_async_result_complete (simple);
     g_object_unref (simple);
 }
@@ -2309,6 +2308,7 @@ peek_port_at_for_data (MMBroadbandModemHuawei *self,
 {
     GList *cdc_wdm_at_ports, *l;
     const gchar *net_port_parent_path;
+    MMPortSerialAt *found = NULL;
 
     g_warn_if_fail (mm_port_get_subsys (port) == MM_PORT_SUBSYS_NET);
     net_port_parent_path = mm_port_get_parent_path (port);
@@ -2322,16 +2322,17 @@ peek_port_at_for_data (MMBroadbandModemHuawei *self,
                                                  MM_PORT_SUBSYS_USB,
                                                  MM_PORT_TYPE_AT,
                                                  NULL);
-    for (l = cdc_wdm_at_ports; l; l = g_list_next (l)) {
+    for (l = cdc_wdm_at_ports; l && !found; l = g_list_next (l)) {
         const gchar  *wdm_port_parent_path;
 
         g_assert (MM_IS_PORT_SERIAL_AT (l->data));
         wdm_port_parent_path = mm_port_get_parent_path (MM_PORT (l->data));
         if (wdm_port_parent_path && g_str_equal (wdm_port_parent_path, net_port_parent_path))
-            return MM_PORT_SERIAL_AT (l->data);
+            found = MM_PORT_SERIAL_AT (l->data);
     }
 
-    return NULL;
+    g_list_free_full (cdc_wdm_at_ports, g_object_unref);
+    return found;
 }
 
 
@@ -2696,7 +2697,7 @@ parent_cdma_setup_unsolicited_events_ready (MMIfaceModemCdma *self,
     else {
         /* Our own setup now */
         set_cdma_unsolicited_events_handlers (MM_BROADBAND_MODEM_HUAWEI (self), TRUE);
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     }
 
     g_simple_async_result_complete (simple);
@@ -2727,7 +2728,7 @@ modem_cdma_setup_unsolicited_events (MMIfaceModemCdma *self,
 
     /* Otherwise just run our setup and complete */
     set_cdma_unsolicited_events_handlers (MM_BROADBAND_MODEM_HUAWEI (self), TRUE);
-    g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (result), TRUE);
+    g_simple_async_result_set_op_res_gboolean (result, TRUE);
     g_simple_async_result_complete_in_idle (result);
     g_object_unref (result);
 }
@@ -2742,7 +2743,7 @@ parent_cdma_cleanup_unsolicited_events_ready (MMIfaceModemCdma *self,
     if (!iface_modem_cdma_parent->cleanup_unsolicited_events_finish (self, res, &error))
         g_simple_async_result_take_error (simple, error);
     else
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     g_simple_async_result_complete (simple);
     g_object_unref (simple);
 }
@@ -2773,7 +2774,7 @@ modem_cdma_cleanup_unsolicited_events (MMIfaceModemCdma *self,
     }
 
     /* Otherwise we're done */
-    g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (result), TRUE);
+    g_simple_async_result_set_op_res_gboolean (result, TRUE);
     g_simple_async_result_complete_in_idle (result);
     g_object_unref (result);
 }
@@ -3181,9 +3182,8 @@ parent_voice_setup_unsolicited_events_ready (MMIfaceModemVoice *self,
     else {
         /* Our own setup now */
         set_voice_unsolicited_events_handlers (MM_BROADBAND_MODEM_HUAWEI (self), TRUE);
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     }
-
     g_simple_async_result_complete (simple);
     g_object_unref (simple);
 }
@@ -3217,7 +3217,7 @@ parent_voice_cleanup_unsolicited_events_ready (MMIfaceModemVoice *self,
     if (!iface_modem_voice_parent->cleanup_unsolicited_events_finish (self, res, &error))
         g_simple_async_result_take_error (simple, error);
     else
-        g_simple_async_result_set_op_res_gboolean (G_SIMPLE_ASYNC_RESULT (res), TRUE);
+        g_simple_async_result_set_op_res_gboolean (simple, TRUE);
     g_simple_async_result_complete (simple);
     g_object_unref (simple);
 }
