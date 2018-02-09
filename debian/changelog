@@ -1,6 +1,7 @@
 modemmanager (1.6.12-1) UNRELEASED; urgency=medium
 
   * New upstream release.
+  * Update maintainer email address.
 
  -- Matthias Kurz <m.kurz@irregular.at>  Fri, 09 Feb 2018 20:07:18 +0100
 
